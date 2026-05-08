@@ -67,7 +67,7 @@ function handleCellClick(event) {
     const col = parseInt(event.target.dataset.col);
 
     if (isValidMove(board, row, col, currentPlayer)) {
-        const newBoard = JSON.parse(JSON.stringify(board));
+        const newBoard = cloneBoard(board);
         newBoard[row][col] = currentPlayer;
         flipDiscs(newBoard, row, col, currentPlayer);
         board = newBoard; // Update the main board
@@ -82,11 +82,11 @@ function handleCellClick(event) {
         }
 
         currentPlayer = 2;
-        turnElement.textContent = 'CPUの番です...';
+        turnElement.textContent = 'CPUが考え中... (激ムズ)';
         // Remove hover effects while CPU is thinking
         renderBoard(); 
 
-        setTimeout(cpuTurn, 500); // Give a slight delay for UX
+        setTimeout(cpuTurn, 10); // Start CPU turn immediately after UI updates
     }
 }
 
@@ -195,6 +195,24 @@ function endGame() {
 
 // --- AI LOGIC ---
 
+function getEmptyCellsCount(currentBoard) {
+    let count = 0;
+    for (let r = 0; r < boardSize; r++) {
+        for (let c = 0; c < boardSize; c++) {
+            if (currentBoard[r][c] === 0) count++;
+        }
+    }
+    return count;
+}
+
+function cloneBoard(currentBoard) {
+    const newBoard = [];
+    for (let r = 0; r < boardSize; r++) {
+        newBoard.push([...currentBoard[r]]);
+    }
+    return newBoard;
+}
+
 function cpuTurn() {
     // Player is 2 (white)
     const validMoves = getValidMoves(board, 2);
@@ -211,46 +229,61 @@ function cpuTurn() {
         return;
     }
 
-    // Minimax to find the best move
-    const searchDepth = 4; // Adjust for difficulty (e.g., 4-6)
-    const bestMove = findBestMove(board, searchDepth);
-
-    if (bestMove) {
-        board[bestMove.row][bestMove.col] = 2;
-        flipDiscs(board, bestMove.row, bestMove.col, 2);
+    // Dynamically adjust search depth based on empty cells
+    const emptyCells = getEmptyCellsCount(board);
+    let searchDepth = 7; // Extremely strong depth
+    if (emptyCells <= 12) {
+        searchDepth = 12; // Solve exactly to the end
+    } else if (emptyCells <= 16) {
+        searchDepth = 8;
+    } else if (emptyCells >= 50) {
+        searchDepth = 6; // Faster in the very beginning
     }
 
-    renderBoard();
-    updateScore();
+    // Use a tiny timeout to allow the browser to render the "CPU is thinking" message
+    setTimeout(() => {
+        // Minimax to find the best move
+        const bestMove = findBestMove(board, searchDepth);
 
-    // Check for game over
-    if (getValidMoves(board, 1).length === 0 && getValidMoves(board, 2).length === 0) {
-        endGame();
-        return;
-    }
+        if (bestMove) {
+            board[bestMove.row][bestMove.col] = 2;
+            flipDiscs(board, bestMove.row, bestMove.col, 2);
+        }
 
-    currentPlayer = 1;
-    turnElement.textContent = 'あなたの番です';
-
-    // If player has no moves, CPU plays again
-    if (getValidMoves(board, 1).length === 0) {
-        turnElement.textContent = 'あなたはパスしました。CPUの番です。';
         renderBoard();
-        setTimeout(cpuTurn, 1000);
-        return;
-    }
-    
-    renderBoard(); // To show new valid moves for player
+        updateScore();
+
+        // Check for game over
+        if (getValidMoves(board, 1).length === 0 && getValidMoves(board, 2).length === 0) {
+            endGame();
+            return;
+        }
+
+        currentPlayer = 1;
+        turnElement.textContent = 'あなたの番です';
+
+        // If player has no moves, CPU plays again
+        if (getValidMoves(board, 1).length === 0) {
+            turnElement.textContent = 'あなたはパスしました。CPUの番です。';
+            renderBoard();
+            setTimeout(cpuTurn, 1000);
+            return;
+        }
+        
+        renderBoard(); // To show new valid moves for player
+    }, 10);
 }
 
 function findBestMove(currentBoard, depth) {
-    // Alpha-beta pruning could be added here for optimization
     let bestScore = -Infinity;
     let bestMove = null;
     const validMoves = getValidMoves(currentBoard, 2);
+    
+    // Sort moves to improve Alpha-Beta pruning efficiency
+    validMoves.sort((a, b) => weights[b.row][b.col] - weights[a.row][a.col]);
 
     for (const move of validMoves) {
-        const newBoard = JSON.parse(JSON.stringify(currentBoard));
+        const newBoard = cloneBoard(currentBoard);
         newBoard[move.row][move.col] = 2;
         flipDiscs(newBoard, move.row, move.col, 2);
         const score = minimax(newBoard, depth - 1, false, -Infinity, Infinity);
@@ -264,16 +297,41 @@ function findBestMove(currentBoard, depth) {
 
 function minimax(currentBoard, depth, maximizingPlayer, alpha, beta) {
     const player = maximizingPlayer ? 2 : 1;
-    const validMoves = getValidMoves(currentBoard, player);
+    const opponent = maximizingPlayer ? 1 : 2;
+    const myValidMoves = getValidMoves(currentBoard, player);
+    const oppValidMoves = getValidMoves(currentBoard, opponent);
 
-    if (depth === 0 || validMoves.length === 0) {
-        return evaluateBoard(currentBoard);
+    // Check game over
+    if (myValidMoves.length === 0 && oppValidMoves.length === 0) {
+        let blackScore = 0;
+        let whiteScore = 0;
+        for (let r = 0; r < boardSize; r++) {
+            for (let c = 0; c < boardSize; c++) {
+                if (currentBoard[r][c] === 1) blackScore++;
+                else if (currentBoard[r][c] === 2) whiteScore++;
+            }
+        }
+        if (whiteScore > blackScore) return 10000 + whiteScore; // CPU Win
+        if (blackScore > whiteScore) return -10000 - blackScore; // CPU Lose
+        return 0; // Draw
     }
+
+    if (depth === 0) {
+        return evaluateBoard(currentBoard, maximizingPlayer ? myValidMoves.length : oppValidMoves.length, maximizingPlayer ? oppValidMoves.length : myValidMoves.length);
+    }
+
+    // Pass turn
+    if (myValidMoves.length === 0) {
+        return minimax(currentBoard, depth - 1, !maximizingPlayer, alpha, beta);
+    }
+
+    // Sort moves
+    myValidMoves.sort((a, b) => weights[b.row][b.col] - weights[a.row][a.col]);
 
     if (maximizingPlayer) {
         let maxEval = -Infinity;
-        for (const move of validMoves) {
-            const newBoard = JSON.parse(JSON.stringify(currentBoard));
+        for (const move of myValidMoves) {
+            const newBoard = cloneBoard(currentBoard);
             newBoard[move.row][move.col] = player;
             flipDiscs(newBoard, move.row, move.col, player);
             const evalScore = minimax(newBoard, depth - 1, false, alpha, beta);
@@ -286,8 +344,8 @@ function minimax(currentBoard, depth, maximizingPlayer, alpha, beta) {
         return maxEval;
     } else { // Minimizing player
         let minEval = Infinity;
-        for (const move of validMoves) {
-            const newBoard = JSON.parse(JSON.stringify(currentBoard));
+        for (const move of myValidMoves) {
+            const newBoard = cloneBoard(currentBoard);
             newBoard[move.row][move.col] = player;
             flipDiscs(newBoard, move.row, move.col, player);
             const evalScore = minimax(newBoard, depth - 1, true, alpha, beta);
@@ -301,20 +359,28 @@ function minimax(currentBoard, depth, maximizingPlayer, alpha, beta) {
     }
 }
 
-function evaluateBoard(currentBoard) {
-    let blackScore = 0;
-    let whiteScore = 0;
+function evaluateBoard(currentBoard, cpuMobility, playerMobility) {
+    let myScore = 0;
+    let oppScore = 0;
 
     for (let row = 0; row < boardSize; row++) {
         for (let col = 0; col < boardSize; col++) {
-            if (currentBoard[row][col] === 1) { // Player
-                blackScore += weights[row][col];
-            } else if (currentBoard[row][col] === 2) { // CPU
-                whiteScore += weights[row][col];
+            if (currentBoard[row][col] === 2) { // CPU
+                myScore += weights[row][col];
+            } else if (currentBoard[row][col] === 1) { // Player
+                oppScore += weights[row][col];
             }
         }
     }
-    return whiteScore - blackScore; // Return score from CPU's perspective
+    
+    // Evaluate mobility (number of valid moves)
+    // Highly important for winning Othello
+    if (cpuMobility !== undefined && playerMobility !== undefined) {
+        myScore += cpuMobility * 15;
+        oppScore += playerMobility * 15;
+    }
+
+    return myScore - oppScore; // Return score from CPU's perspective
 }
 
 
